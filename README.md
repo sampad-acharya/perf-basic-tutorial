@@ -24,6 +24,9 @@ g++ -O2 -g -fno-omit-frame-pointer perflab.cpp -o perflab
 ./perflab            # lists the modes
 ```
 
+Or just `make`. The Makefile also wraps the common commands; `make help`
+lists them.
+
 - `-g` lets perf map samples back to source lines.
 - `-fno-omit-frame-pointer` lets perf walk the stack for call graphs (step 6).
 
@@ -217,7 +220,38 @@ perf trace -s ./perflab syscall 2>&1 | head -20
 
 Tracepoints and `perf trace` usually need root or `perf_event_paranoid <= 0`.
 
-## 10. Things to try next
+## 10. Flame graphs — the whole profile as one picture
+
+perf collects the stacks; Brendan Gregg's FlameGraph scripts draw them.
+
+```sh
+git clone --depth 1 https://github.com/brendangregg/FlameGraph ~/FlameGraph
+
+taskset -c 2 perf record -g ./perflab all
+perf script | ~/FlameGraph/stackcollapse-perf.pl | ~/FlameGraph/flamegraph.pl > flame.svg
+```
+
+Or `make flamegraph`, which does all of the above (and `make flamegraph
+MODE=alloc` for a single mode). Open `flame.svg` in a browser; click a box to
+zoom, hover for percentages.
+
+How to read it:
+
+- **Width** is the share of samples in that function plus everything it
+  called. Wide means expensive.
+- **Height** is call depth: `main` at the bottom, the running function on top.
+- **Left-to-right order** is alphabetical, not time.
+- **Colour** is random.
+
+For `all` you should see `_start` and `main` at the bottom, `hot_loop` and
+`sum_big_values` as the two widest towers, `alloc_churn` with `malloc` and
+`_int_free` stacked on it, and `syscall_storm` with a tall, thin stack of
+kernel functions above `write`.
+
+This is the same data as step 6. It needs the same working call stacks, so
+the `-fno-omit-frame-pointer` build flag matters here too.
+
+## 11. Things to try next
 
 1. Rebuild with `-O0` and repeat step 1 on `hot`. What happens to IPC and
    instruction count?
@@ -243,6 +277,7 @@ Tracepoints and `perf trace` usually need root or `perf_event_paranoid <= 0`.
 | Is the result stable? | `perf stat -r 5 ./prog` |
 | Which function is hot? | `perf record ./prog` then `perf report` |
 | Who calls it? | `perf record -g ./prog` then `perf report --children` |
+| Whole profile as a picture? | `make flamegraph` (step 10) |
 | Which instruction? | `perf annotate --stdio -M intel func` |
 | Why is the CPU stalled? | `perf stat -M TopdownL1 ./prog` |
 | Which syscalls? | `perf trace -s ./prog` |
