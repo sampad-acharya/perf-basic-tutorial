@@ -20,12 +20,17 @@ perf 7.0. Yours will differ; the ratios should not.
 ## 0. Build
 
 ```sh
-g++ -O2 -g -fno-omit-frame-pointer perflab.cpp -o perflab
+cmake -B build
+cmake --build build
 ./perflab            # lists the modes
 ```
 
-Or just `make`. The Makefile also wraps the common commands; `make help`
-lists them.
+The binary is written next to the source, so every command below uses
+`./perflab`. Without CMake, this one line builds the same thing:
+
+```sh
+g++ -O2 -g -fno-omit-frame-pointer perflab.cpp -o perflab
+```
 
 - `-g` lets perf map samples back to source lines.
 - `-fno-omit-frame-pointer` lets perf walk the stack for call graphs (step 6).
@@ -231,9 +236,7 @@ taskset -c 2 perf record -g ./perflab all
 perf script | ~/FlameGraph/stackcollapse-perf.pl | ~/FlameGraph/flamegraph.pl > flame.svg
 ```
 
-Or `make flamegraph`, which does all of the above (and `make flamegraph
-MODE=alloc` for a single mode). Open `flame.svg` in a browser; click a box to
-zoom, hover for percentages.
+Open `flame.svg` in a browser; click a box to zoom, hover for percentages.
 
 How to read it:
 
@@ -277,7 +280,7 @@ the `-fno-omit-frame-pointer` build flag matters here too.
 | Is the result stable? | `perf stat -r 5 ./prog` |
 | Which function is hot? | `perf record ./prog` then `perf report` |
 | Who calls it? | `perf record -g ./prog` then `perf report --children` |
-| Whole profile as a picture? | `make flamegraph` (step 10) |
+| Whole profile as a picture? | `perf script \| stackcollapse-perf.pl \| flamegraph.pl` (step 10) |
 | Which instruction? | `perf annotate --stdio -M intel func` |
 | Why is the CPU stalled? | `perf stat -M TopdownL1 ./prog` |
 | Which syscalls? | `perf trace -s ./prog` |

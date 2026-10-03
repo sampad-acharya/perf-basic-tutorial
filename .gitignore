@@ -1,3 +1,4 @@
 perflab
+build/
 perf.data*
 flame.svg
