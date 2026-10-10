@@ -227,18 +227,104 @@ Tracepoints and `perf trace` usually need root or `perf_event_paranoid <= 0`.
 
 ## 10. Flame graphs — the whole profile as one picture
 
-perf collects the stacks; Brendan Gregg's FlameGraph scripts draw them.
+perf collects the stacks; Brendan Gregg's FlameGraph scripts draw them. The
+pipeline is always the same three stages: **sample** stacks, **fold**
+identical stacks together, **draw** boxes whose width is the sample count.
+
+The graphs produced by the commands below are checked in under `result/`.
+
+### 10.1 One-time setup
+
+You need `perf`, `perl`, and the FlameGraph scripts (plain Perl, nothing to
+build):
 
 ```sh
 git clone --depth 1 https://github.com/brendangregg/FlameGraph ~/FlameGraph
-
-taskset -c 2 perf record -g ./perflab all
-perf script | ~/FlameGraph/stackcollapse-perf.pl | ~/FlameGraph/flamegraph.pl > flame.svg
 ```
 
-Open `flame.svg` in a browser; click a box to zoom, hover for percentages.
+### 10.2 Build with frame pointers and debug info
 
-How to read it:
+The CMake build from step 0 already uses `RelWithDebInfo` and
+`-fno-omit-frame-pointer`. Rebuild only if you changed the source:
+
+```sh
+cmake -B build
+cmake --build build
+```
+
+### 10.3 Record a profile with call stacks
+
+```sh
+taskset -c 2 perf record -g ./perflab all
+```
+
+- `-g` saves the whole call stack with every sample, not just the function
+  that was running. Without it there is nothing to stack.
+- `taskset -c 2` pins the run to one core, as in the earlier steps.
+- Output goes to `perf.data` (an existing one is renamed `perf.data.old`).
+  Expect about 5 seconds and roughly 16,000 samples.
+
+### 10.4 Dump the samples as text
+
+```sh
+perf script > out.perf
+```
+
+`perf script` reads `perf.data` and prints every sample with its stack, one
+frame per line. Look at it once with `head -30 out.perf`.
+
+### 10.5 Fold the stacks
+
+```sh
+~/FlameGraph/stackcollapse-perf.pl out.perf > out.folded
+```
+
+Each distinct stack becomes one line, root first, frames joined by `;`,
+followed by how often it was seen:
+
+```
+perflab;_start;...;main;alloc_churn;__libc_free;_int_free 385541579
+```
+
+This file is plain text, so `grep` and `sort` work on it. The ten hottest
+stacks:
+
+```sh
+awk '{print $NF, $0}' out.folded | sort -nr | head
+```
+
+### 10.6 Render the SVG
+
+```sh
+mkdir -p result
+~/FlameGraph/flamegraph.pl --title "perflab all" out.folded > result/flame-fp.svg
+```
+
+### 10.7 Open it
+
+Open `result/flame-fp.svg` in a browser. Click a box to zoom, hover for
+percentages, Ctrl+F to search. On a remote machine, copy it to your laptop
+first:
+
+```sh
+scp user@host:code_repo/perf-basic-tutorial/result/flame-fp.svg .
+```
+
+### 10.8 The same thing as one pipeline
+
+Steps 10.4 to 10.6 without the intermediate files:
+
+```sh
+perf script | ~/FlameGraph/stackcollapse-perf.pl | ~/FlameGraph/flamegraph.pl > result/flame-fp.svg
+```
+
+If you did keep the intermediate files, remove them when done:
+
+```sh
+rm -f out.perf out.folded
+```
+
+### 10.9 How to read it
 
 - **Width** is the share of samples in that function plus everything it
   called. Wide means expensive.
@@ -246,10 +332,44 @@ How to read it:
 - **Left-to-right order** is alphabetical, not time.
 - **Colour** is random.
 
-For `all` you should see `_start` and `main` at the bottom, `hot_loop` and
-`sum_big_values` as the two widest towers, `alloc_churn` with `malloc` and
-`_int_free` stacked on it, and `syscall_storm` with a tall, thin stack of
-kernel functions above `write`.
+For `all`, expect roughly this split (numbers from one run; yours will differ
+a little):
+
+| Tower | Share |
+|---|---|
+| `hot_loop` | ~28% |
+| `sum_big_values` | ~26% |
+| `write()` and the kernel stack above it | ~14% |
+| `alloc_churn` with `malloc` / `_int_free` on top | ~10% |
+| cache modes (`shuffle_order`, `sum_by_index`, page faults) | most of the rest |
+
+### 10.10 Broken stacks, and the DWARF fix
+
+`-g` walks the stack by following frame pointers. A function that does not
+set up its own frame makes the unwinder skip that function's caller. In
+`result/flame-fp.svg` this shows up in three places:
+
+- `hot_loop` sits directly on `__libc_start_call_main`; `main` is missing.
+- `__libc_write` sits directly on `main`; `syscall_storm` is missing.
+- `sum_big_values` sits directly on `main`; `run_branch` is missing.
+
+The widths are still right. Only the parent is wrong.
+
+To get correct stacks, unwind with the DWARF debug info instead. Only the
+record command changes:
+
+```sh
+taskset -c 2 perf record --call-graph dwarf ./perflab all
+perf script | ~/FlameGraph/stackcollapse-perf.pl \
+  | ~/FlameGraph/flamegraph.pl --title "perflab all (dwarf)" > result/flame-dwarf.svg
+```
+
+In `result/flame-dwarf.svg` all three callers are back: `main;hot_loop`,
+`main;syscall_storm;__libc_write`, `main;run_branch;sum_big_values`.
+
+The cost is size and overhead: perf copies a chunk of the stack with every
+sample, so `perf.data` was about 128 MB instead of 1.8 MB for this run. Use
+frame pointers by default and DWARF when the stacks look wrong.
 
 This is the same data as step 6. It needs the same working call stacks, so
 the `-fno-omit-frame-pointer` build flag matters here too.
